@@ -1,0 +1,266 @@
+package com.roboo.mineshafttycoonutils.features.timers;
+
+import com.roboo.mineshafttycoonutils.config.ConfigManager;
+import com.roboo.mineshafttycoonutils.config.categories.TimersCategory;
+import com.roboo.mineshafttycoonutils.features.misc.HousingVerifier;
+import com.roboo.mineshafttycoonutils.features.plasma.PlasmaSmitheryTracker;
+import com.roboo.mineshafttycoonutils.features.plasma.SolarFlareTracker;
+import com.roboo.mineshafttycoonutils.hud.HudEditorRegistry;
+import com.roboo.mineshafttycoonutils.hud.HudScale;
+import com.roboo.mineshafttycoonutils.hud.MovableHud;
+import com.roboo.mineshafttycoonutils.utils.HudTextUtils;
+import com.roboo.mineshafttycoonutils.utils.TimeFormatUtils;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.resources.Identifier;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class TimersHud {
+
+    private static final Minecraft mc = Minecraft.getInstance();
+    private static final int LINE_HEIGHT = 10;
+
+    private record PotionTier(BuffTracker.Buff buff, String label) {}
+
+    private static final List<PotionTier> POTION_TIERS = List.of(
+            new PotionTier(BuffTracker.Buff.T4_POTION, "T4 Pot: "),
+            new PotionTier(BuffTracker.Buff.T3_POTION, "T3 Pot: "),
+            new PotionTier(BuffTracker.Buff.T2_POTION, "T2 Pot: "),
+            new PotionTier(BuffTracker.Buff.T1_POTION, "T1 Pot: ")
+    );
+
+    private static final MovableHud TIMER_BOX = new MovableHud() {
+        @Override
+        public String getDisplayName() {
+            return "Timers";
+        }
+
+        @Override
+        public boolean isMasterEnabled() {
+            return ConfigManager.config.timers.hudEnabled && HousingVerifier.isVerified();
+        }
+
+        @Override
+        public int getX() {
+            TimersCategory cfg = ConfigManager.config.timers;
+            int anchorX = cfg.timersHudX;
+            return HudTextUtils.isRightAligned(anchorX, cfg.disableRightAlignFlip) ? anchorX - getWidth() : anchorX;
+        }
+
+        @Override
+        public int getY() {
+            return ConfigManager.config.timers.timersHudY;
+        }
+
+        @Override
+        public int getWidth() {
+            return Math.round(calcWidth() * HudScale.normalize(ConfigManager.config.timers.scale));
+        }
+
+        @Override
+        public int getHeight() {
+            return Math.round(calcHeight() * HudScale.normalize(ConfigManager.config.timers.scale));
+        }
+
+        @Override
+        public float getScale() {
+            return ConfigManager.config.timers.scale;
+        }
+
+        @Override
+        public void setScale(float scale) {
+            ConfigManager.config.timers.scale = HudScale.clamp(scale);
+        }
+
+        @Override
+        public void setPosition(int x, int y) {
+            ConfigManager.config.timers.timersHudX = x;
+            ConfigManager.config.timers.timersHudY = y;
+        }
+
+        @Override
+        public void render(GuiGraphics graphics) {
+            TimersCategory cfg = ConfigManager.config.timers;
+            drawContent(graphics, cfg.timersHudX, cfg.timersHudY);
+        }
+    };
+
+    public static void init() {
+        HudEditorRegistry.register(TIMER_BOX);
+
+        HudElementRegistry.attachElementBefore(
+                VanillaHudElements.CHAT,
+                Identifier.fromNamespaceAndPath("mineshafttycoonutils", "timers_hud"),
+                (graphics, tickCounter) -> {
+                    TimersCategory cfg = ConfigManager.config.timers;
+                    if (mc.player == null || !cfg.hudEnabled) return;
+                    if (!HousingVerifier.isVerified()) return;
+
+                    List<String> lines = calcLines(cfg);
+                    if (lines.isEmpty()) return;
+
+                    int totalHeight = Math.round((lines.size() + 1) * LINE_HEIGHT * HudScale.normalize(cfg.scale));
+
+                    int x = HudTextUtils.clampX(cfg.timersHudX);
+                    int y = HudTextUtils.clampY(cfg.timersHudY, totalHeight);
+
+                    drawContent(graphics, x, y);
+                }
+        );
+    }
+
+    private static final String TITLE_TEXT = "§lTimers";
+
+    private static void drawContent(GuiGraphics graphics, int anchorX, int y) {
+        TimersCategory cfg = ConfigManager.config.timers;
+        List<String> lines = calcLines(cfg);
+        boolean rightAligned = HudTextUtils.isRightAligned(anchorX, cfg.disableRightAlignFlip);
+        float scale = HudScale.normalize(cfg.scale);
+        int unscaledWidth = calcWidth();
+        int screenLeft = rightAligned ? anchorX - Math.round(unscaledWidth * scale) : anchorX;
+        int localAnchorX = rightAligned ? unscaledWidth : 0;
+
+        graphics.pose().pushMatrix();
+        graphics.pose().translate(screenLeft, y);
+        graphics.pose().scale(scale, scale);
+
+        HudTextUtils.drawLine(graphics, TITLE_TEXT, localAnchorX, 0, rightAligned, HudTextUtils.chromaToArgb(cfg.titleColor));
+        int line = 1;
+        for (String l : lines) {
+            HudTextUtils.drawLine(graphics, l, localAnchorX, LINE_HEIGHT * line++, rightAligned);
+        }
+
+        graphics.pose().popMatrix();
+    }
+
+    private static List<String> calcLines(TimersCategory cfg) {
+        List<String> lines = new ArrayList<>();
+        for (TimersCategory.Entry entry : cfg.order) {
+            if (entry == TimersCategory.Entry.GREENHOUSE) {
+                lines.addAll(renderGreenhouseLines());
+                continue;
+            }
+
+            String rendered = renderEntry(entry, cfg);
+            if (rendered != null) lines.add(rendered);
+        }
+        return lines;
+    }
+
+    private static int calcWidth() {
+        TimersCategory cfg = ConfigManager.config.timers;
+        int width = mc.font.width(TITLE_TEXT);
+        for (String line : calcLines(cfg)) {
+            width = Math.max(width, mc.font.width(line));
+        }
+        return width;
+    }
+
+    private static int calcHeight() {
+        List<String> lines = calcLines(ConfigManager.config.timers);
+        if (lines.isEmpty()) return LINE_HEIGHT;
+        return (lines.size() + 1) * LINE_HEIGHT;
+    }
+
+    private static String renderEntry(TimersCategory.Entry entry, TimersCategory cfg) {
+        return switch (entry) {
+            case POTION -> renderPotion(cfg);
+            case IRONVINE -> renderBuff("Ironvine: ", BuffTracker.Buff.IRONVINE, cfg);
+            case REDROOT -> renderBuff("Redroot: ", BuffTracker.Buff.REDROOT, cfg);
+            case AURORA_FRUIT -> renderBuff("Aurora Fruit: ", BuffTracker.Buff.AURORA_FRUIT, cfg);
+            case SQUASH -> renderBuff("Squash: ", BuffTracker.Buff.SQUASH, cfg);
+            case DUSTGRAIN -> renderBuff("Dustgrain: ", BuffTracker.Buff.DUSTGRAIN, cfg);
+            case SUNFLOWER -> renderBuff("Sunflower: ", BuffTracker.Buff.SUNFLOWER, cfg);
+            case FISHING_BUFF -> renderBuff("Fishing Buff: ", BuffTracker.Buff.FISHING_BUFF, cfg);
+            case PETAD -> renderPetad(cfg);
+            case EVENT -> renderEvent(cfg);
+            case COMPACTOR_1 -> renderCompactor("Compactor 1: ", CompactorTracker.getSecondsLeft(CompactorTracker.Compactor.FIRST), cfg);
+            case COMPACTOR_2 -> renderCompactor("Compactor 2: ", CompactorTracker.getSecondsLeft(CompactorTracker.Compactor.SECOND), cfg);
+            case PLASMA_GEN_1 -> renderTimed("Plasma Gen 1: ", PlasmaSmitheryTracker.getGen1SecondsLeft(), cfg);
+            case PLASMA_GEN_2 -> renderTimed("Plasma Gen 2: ", PlasmaSmitheryTracker.getGen2SecondsLeft(), cfg);
+            case REFUEL -> renderRefuel(cfg);
+            case GREENHOUSE -> null;
+        };
+    }
+
+    private static String renderPotion(TimersCategory cfg) {
+        for (PotionTier tier : POTION_TIERS) {
+            if (!BuffTracker.isPotionActive(tier.buff())) continue;
+            long secondsLeft = BuffTracker.getPotionSecondsLeft(tier.buff());
+            if (secondsLeft > 0) return "§7" + tier.label() + "§e" + formatDuration(secondsLeft, cfg);
+        }
+
+        for (PotionTier tier : POTION_TIERS) {
+            if (BuffTracker.isEnabled(tier.buff())) continue;
+            long secondsLeft = BuffTracker.getPotionSecondsLeft(tier.buff());
+            if (secondsLeft > 0) return "§7" + tier.label() + "§c" + formatDuration(secondsLeft, cfg);
+        }
+
+        return null;
+    }
+
+    private static List<String> renderGreenhouseLines() {
+        List<String> lines = new ArrayList<>();
+        for (GreenhouseTracker.Plot plot : GreenhouseTracker.Plot.values()) {
+            String text = GreenhouseTracker.describe(plot);
+            if (text != null) lines.add("§7Plot " + plot.number + ": " + text);
+        }
+        return lines;
+    }
+
+    private static String renderBuff(String label, BuffTracker.Buff buff, TimersCategory cfg) {
+        long secondsLeft = BuffTracker.getSecondsLeft(buff);
+        if (secondsLeft <= 0) return null;
+
+        String time = formatDuration(secondsLeft, cfg);
+        boolean enabled = BuffTracker.isEnabled(buff);
+        String color = enabled ? "§e" : "§c";
+        return "§7" + label + color + time;
+    }
+
+    private static String renderTimed(String label, long secondsLeft, TimersCategory cfg) {
+        if (secondsLeft <= 0) return null;
+        return "§7" + label + "§e" + formatDuration(secondsLeft, cfg);
+    }
+
+    private static String renderCompactor(String label, long secondsLeft, TimersCategory cfg) {
+        if (secondsLeft < 0) return null;
+        if (secondsLeft == 0) return "§7" + label + "§aDone";
+        return "§7" + label + "§e" + formatDuration(secondsLeft, cfg);
+    }
+
+    private static String renderRefuel(TimersCategory cfg) {
+        long secondsLeft = SolarFlareTracker.getRefuelSecondsLeft();
+        if (secondsLeft < 0) return null;
+        if (secondsLeft == 0) return "§7Refuel: §cNow";
+
+        return "§7Refuel: §e" + formatDuration(secondsLeft, cfg);
+    }
+
+    private static String renderPetad(TimersCategory cfg) {
+        return switch (PetAdTracker.getState()) {
+            case UNKNOWN -> null;
+            case INACTIVE -> "§7Petad: §cInactive!";
+            case READY -> "§7Petad: §aReady!";
+            case TIMING -> "§7Petad: §e" + formatDuration(PetAdTracker.getSecondsLeft(), cfg);
+        };
+    }
+
+    private static String renderEvent(TimersCategory cfg) {
+        long secondsLeft = EventTimerTracker.getSecondsLeft();
+        if (secondsLeft < 0) return null;
+
+        String name = EventTimerTracker.getName();
+        if (secondsLeft == 0) return "§7" + name + ": §aNow!";
+        return "§7" + name + ": §e" + formatDuration(secondsLeft, cfg);
+    }
+
+    private static String formatDuration(long totalSeconds, TimersCategory cfg) {
+        boolean showSeconds = !(cfg.hideSecondsUntilFinalMinute && totalSeconds >= 60);
+        return TimeFormatUtils.formatDuration(totalSeconds, showSeconds);
+    }
+}

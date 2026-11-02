@@ -1,0 +1,269 @@
+package com.roboo.mineshafttycoonutils.features.fishing;
+
+import com.roboo.mineshafttycoonutils.config.ConfigManager;
+import com.roboo.mineshafttycoonutils.config.categories.FishingCategory;
+import com.roboo.mineshafttycoonutils.features.eggvalue.EggValueTracker;
+import com.roboo.mineshafttycoonutils.features.misc.HousingVerifier;
+import com.roboo.mineshafttycoonutils.hud.HudEditorRegistry;
+import com.roboo.mineshafttycoonutils.hud.HudScale;
+import com.roboo.mineshafttycoonutils.hud.MovableHud;
+import com.roboo.mineshafttycoonutils.utils.HudZones;
+import com.roboo.mineshafttycoonutils.utils.HudTextUtils;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.resources.Identifier;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+public class FishingHud {
+
+    private static final Minecraft mc = Minecraft.getInstance();
+    private static final int LINE_HEIGHT = 10;
+
+    private static final MovableHud FISHING_BOX = new MovableHud() {
+        @Override
+        public String getDisplayName() {
+            return "Fishing Tracker";
+        }
+
+        @Override
+        public boolean isMasterEnabled() {
+            return cfg().hudEnabled && HousingVerifier.isVerified();
+        }
+
+        @Override
+        public int getX() {
+            FishingCategory cfg = cfg();
+            int anchorX = cfg.hudX;
+            return HudTextUtils.isRightAligned(anchorX, cfg.disableRightAlignFlip) ? anchorX - getWidth() : anchorX;
+        }
+
+        @Override
+        public int getY() {
+            return cfg().hudY;
+        }
+
+        @Override
+        public int getWidth() {
+            return Math.round(calcWidth() * HudScale.normalize(cfg().scale));
+        }
+
+        @Override
+        public int getHeight() {
+            return Math.round(calcHeight() * HudScale.normalize(cfg().scale));
+        }
+
+        @Override
+        public float getScale() {
+            return cfg().scale;
+        }
+
+        @Override
+        public void setScale(float scale) {
+            cfg().scale = HudScale.clamp(scale);
+        }
+
+        @Override
+        public void setPosition(int x, int y) {
+            cfg().hudX = x;
+            cfg().hudY = y;
+        }
+
+        @Override
+        public void render(GuiGraphics graphics) {
+            FishingCategory cfg = cfg();
+            drawContent(graphics, cfg.hudX, cfg.hudY);
+        }
+    };
+
+    public static void init() {
+        HudEditorRegistry.register(FISHING_BOX);
+
+        HudElementRegistry.attachElementBefore(
+                VanillaHudElements.CHAT,
+                Identifier.fromNamespaceAndPath("mineshafttycoonutils", "fishing_hud"),
+                (graphics, tickCounter) -> {
+                    FishingCategory cfg = cfg();
+                    if (mc.player == null || !cfg.hudEnabled) return;
+                    if (!HousingVerifier.isVerified()) return;
+                    if (EggValueTracker.isActive()) return;
+                    if (cfg.hideInOtherZones && !HudZones.isInFishingZone(mc.player.blockPosition())) return;
+
+                    int totalHeight = Math.round(calcHeight() * HudScale.normalize(cfg.scale));
+                    int x = HudTextUtils.clampX(cfg.hudX);
+                    int y = HudTextUtils.clampY(cfg.hudY, totalHeight);
+
+                    drawContent(graphics, x, y);
+                }
+        );
+    }
+
+    private static FishingCategory cfg() {
+        return ConfigManager.config.fishing;
+    }
+
+    private static final String TITLE_TEXT = "§lFishing Tracker";
+
+    private static void drawContent(GuiGraphics graphics, int anchorX, int y) {
+        FishingCategory cfg = cfg();
+        List<String> lines = calcLines(cfg);
+        boolean rightAligned = HudTextUtils.isRightAligned(anchorX, cfg.disableRightAlignFlip);
+        float scale = HudScale.normalize(cfg.scale);
+        int unscaledWidth = calcWidth();
+        int screenLeft = rightAligned ? anchorX - Math.round(unscaledWidth * scale) : anchorX;
+        int localAnchorX = rightAligned ? unscaledWidth : 0;
+
+        graphics.pose().pushMatrix();
+        graphics.pose().translate(screenLeft, y);
+        graphics.pose().scale(scale, scale);
+
+        HudTextUtils.drawLine(graphics, TITLE_TEXT, localAnchorX, 0, rightAligned, HudTextUtils.chromaToArgb(cfg.titleColor));
+        int line = 1;
+        for (String l : lines) {
+            HudTextUtils.drawLine(graphics, l, localAnchorX, LINE_HEIGHT * line++, rightAligned);
+        }
+
+        graphics.pose().popMatrix();
+    }
+
+    private static List<String> calcLines(FishingCategory cfg) {
+        List<String> lines = new ArrayList<>();
+
+        for (FishingCategory.LineEntry entry : cfg.hudLineOrder) {
+            switch (entry) {
+                case TOTAL -> {
+                    int doubleHooks = FishingTracker.getDoubleHookCount();
+                    int displayTotal = FishingTracker.getTotalCount() - doubleHooks;
+                    String totalLine = "§7Total: §e" + displayTotal;
+                    if (cfg.showDoubleHookCount && doubleHooks > 0) {
+                        totalLine += " §7(§e" + doubleHooks + "dh§7)";
+                    }
+                    lines.add(totalLine);
+                }
+                case TREASURE_DROPS -> {
+                    int combinedCount = FishingTracker.getTreasureDropCount() + FishingTracker.getPlateDropCount();
+                    lines.add("§7Treasure Drops: §e" + combinedCount);
+
+                    if (cfg.treasure.breakdownEnabled) {
+                        Map<String, Integer> combinedBreakdown = new LinkedHashMap<>(FishingTracker.getTreasureBreakdown());
+                        combinedBreakdown.putAll(FishingTracker.getPlateBreakdown());
+                        lines.addAll(breakdownLines(cfg, combinedBreakdown, names(cfg.treasure.order)));
+                    }
+                }
+                case TROPHY_FISH -> {
+                    lines.add("§7Trophy Fish: §e" + FishingTracker.getTrophyCount());
+                    if (cfg.trophyFish.breakdownEnabled) {
+                        lines.addAll(breakdownLines(cfg, FishingTracker.getTrophyBreakdown(), names(cfg.trophyFish.order)));
+                    }
+                }
+                case SEA_CREATURES -> {
+                    lines.add("§7Sea Creatures: §e" + FishingTracker.getSeaCreatureCount());
+                    if (cfg.seaCreatures.breakdownEnabled) {
+                        lines.addAll(breakdownLines(cfg, FishingTracker.getSeaCreatureBreakdown(), names(cfg.seaCreatures.order)));
+                    }
+                }
+                case CRATES -> {
+                    lines.add("§7Crates: §e" + FishingTracker.getCrateCount());
+                    if (cfg.crates.breakdownEnabled) {
+                        lines.addAll(breakdownLines(cfg, FishingTracker.getCrateBreakdown(), names(cfg.crates.order)));
+                    }
+                }
+            }
+        }
+
+        return lines;
+    }
+
+    private static List<String> breakdownLines(FishingCategory cfg, Map<String, Integer> breakdown, List<String> orderList) {
+        List<String> result = new ArrayList<>();
+
+        for (String orderedName : orderList) {
+            Integer count = breakdown.get(orderedName);
+            if (count != null && count > 0) {
+                String colorCode = cfg.coloredNamesEnabled
+                        ? getColorForName(orderedName)
+                        : "§f";
+
+                String displayName = orderedName;
+                String valueText = String.valueOf(count);
+
+                if (orderedName.equals("Fortune Fragments")) {
+                    displayName = "Fortune Frags";
+                    valueText = String.valueOf(FishingTracker.getFortuneFragmentsCatches());
+                    if (cfg.treasure.showFortuneFragmentsTotal) {
+                        valueText += " (" + count + ")";
+                    }
+                }
+
+                if (FishingTracker.PLATE_ORDER.contains(orderedName)) {
+                    displayName = orderedName + " Plate";
+                    valueText = String.valueOf(FishingTracker.getPlateCatches(orderedName));
+                    if (cfg.treasure.showPlateTotal) {
+                        valueText += " (" + count + ")";
+                    }
+                }
+
+                result.add("  §7- " + colorCode + displayName + "§7: §e" + valueText);
+            }
+        }
+
+        return result;
+    }
+
+    private static List<String> names(List<?> orderEntries) {
+        List<String> result = new ArrayList<>(orderEntries.size());
+        for (Object entry : orderEntries) {
+            result.add(entry.toString());
+        }
+        return result;
+    }
+
+    private static int calcWidth() {
+        FishingCategory cfg = cfg();
+        int width = mc.font.width(TITLE_TEXT);
+        for (String line : calcLines(cfg)) {
+            width = Math.max(width, mc.font.width(line));
+        }
+        return width;
+    }
+
+    private static int calcHeight() {
+        List<String> lines = calcLines(cfg());
+        return (lines.size() + 1) * LINE_HEIGHT;
+    }
+
+    private static String getColorForName(String name) {
+        return switch (name.toLowerCase()) {
+            case "emerald" -> "§2";
+
+            case "abyssal crate", "small fish", "red herring", "clownfish" -> "§3";
+
+            case "phantom fisher", "captain barbossa", "epic crate", "kraken scale", "puffer fish" -> "§5";
+
+            case "zephyr", "locked lsc", "legendary crate", "golden crate", "fortune fragments", "golden coral",
+                 "gold", "royal fish" -> "§6";
+
+            case "common crate", "coal" -> "§7";
+
+            case "scarfion", "cthulhu", "attack squid", "rare crate" -> "§9";
+
+            case "supreme leech", "deep sea scientist", "fafnir", "uncommon crate", "pufferfish",
+                 "anglerfish bulb", "sea turtle scute", "octopus", "clown fish" -> "§a";
+
+            case "pet crate", "ancient trident", "diamond" -> "§b";
+
+            case "mythic crate", "mythical crate" -> "§c";
+
+            case "mermaid's pearl", "fused" -> "§d";
+
+            case "trash squid", "iron", "lost trainer", "diver", "wood", "steel" -> "§f";
+
+            default -> "§8";
+        };
+    }
+}

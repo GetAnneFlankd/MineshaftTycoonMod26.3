@@ -1,0 +1,117 @@
+package com.roboo.mineshafttycoonutils.utils;
+
+import com.roboo.mineshafttycoonutils.MineshaftTycoonUtils;
+import com.roboo.mineshafttycoonutils.config.ConfigManager;
+import com.roboo.mineshafttycoonutils.config.misc.KeybindsConfig;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Style;
+import net.minecraft.network.protocol.game.ServerboundChatCommandPacket;
+import org.lwjgl.glfw.GLFW;
+
+public class HotkeyUtils {
+
+    private static final Minecraft mc = Minecraft.getInstance();
+    private static final double PIXEL_ART_LINE_SPACING = 0.15;
+
+    private static boolean lastPixelArtTags = false;
+    private static boolean lastToggleAttackKeyDown = false;
+    private static boolean lastToggleUseKeyDown = false;
+    private static boolean lastVisibilityZeroKeyDown = false;
+    private static boolean lastVisibilityThousandKeyDown = false;
+
+    public static void init() {
+        lastPixelArtTags = ConfigManager.config.glyph.playerMessageGlyphs.isEnabled();
+
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            handleChatLineSpacing();
+            handleKeybinds();
+        });
+    }
+
+    private static void handleChatLineSpacing() {
+        var cfg = ConfigManager.config.playerMessages;
+        boolean enabled = ConfigManager.config.glyph.playerMessageGlyphs.isEnabled();
+        if (enabled == lastPixelArtTags) return;
+        lastPixelArtTags = enabled;
+
+        if (enabled) {
+            cfg.savedChatLineSpacing = mc.options.chatLineSpacing().get();
+            mc.options.chatLineSpacing().set(PIXEL_ART_LINE_SPACING);
+        } else if (cfg.savedChatLineSpacing >= 0.0) {
+            mc.options.chatLineSpacing().set(cfg.savedChatLineSpacing);
+            cfg.savedChatLineSpacing = -1.0;
+        }
+
+        mc.options.save();
+        MineshaftTycoonUtils.configManager.saveConfig();
+    }
+
+    private static void handleKeybinds() {
+        if (mc.screen != null) {
+            lastToggleAttackKeyDown = false;
+            lastToggleUseKeyDown = false;
+            lastVisibilityZeroKeyDown = false;
+            lastVisibilityThousandKeyDown = false;
+            return;
+        }
+
+        KeybindsConfig keybinds = ConfigManager.config.misc.keybinds;
+
+        boolean attackDown = isKeyDown(keybinds.toggleAttackKeybind);
+        if (attackDown && !lastToggleAttackKeyDown) {
+            boolean newState = !mc.options.toggleAttack().get();
+            mc.options.toggleAttack().set(newState);
+            mc.options.save();
+            msg("Toggle Left Click", newState);
+        }
+        lastToggleAttackKeyDown = attackDown;
+
+        boolean useDown = isKeyDown(keybinds.toggleUseKeybind);
+        if (useDown && !lastToggleUseKeyDown) {
+            boolean newState = !mc.options.toggleUse().get();
+            mc.options.toggleUse().set(newState);
+            mc.options.save();
+            msg("Toggle Right Click", newState);
+        }
+        lastToggleUseKeyDown = useDown;
+
+        boolean visibilityZeroDown = isKeyDown(keybinds.visibilityZeroKeybind);
+        if (visibilityZeroDown && !lastVisibilityZeroKeyDown) {
+            sendCommand("visibility 0");
+        }
+        lastVisibilityZeroKeyDown = visibilityZeroDown;
+
+        boolean visibilityThousandDown = isKeyDown(keybinds.visibilityThousandKeybind);
+        if (visibilityThousandDown && !lastVisibilityThousandKeyDown) {
+            sendCommand("visibility 1000");
+        }
+        lastVisibilityThousandKeyDown = visibilityThousandDown;
+    }
+
+    private static void sendCommand(String command) {
+        if (mc.player == null) return;
+        mc.player.connection.send(new ServerboundChatCommandPacket(command));
+    }
+
+    private static void msg(String label, boolean enabled) {
+        if (mc.player == null) return;
+
+        MutableComponent message = Component.literal(" " + label + ": ")
+                .withStyle(Style.EMPTY.withColor(0xAAAAAA));
+
+        message.append(Component.literal(enabled ? "Enabled" : "Disabled")
+                .withStyle(Style.EMPTY.withColor(enabled ? 0x55FF55 : 0xFF5555)));
+
+        mc.player.displayClientMessage(SystemMessages.buildPrefix().append(message), false);
+    }
+
+    private static boolean isKeyDown(int glfwKey) {
+        if (glfwKey == GLFW.GLFW_KEY_UNKNOWN) return false;
+        long handle = GLFW.glfwGetCurrentContext();
+        if (handle == 0L) return false;
+        return GLFW.glfwGetKey(handle, glfwKey) == GLFW.GLFW_PRESS;
+    }
+}

@@ -1,0 +1,24 @@
+{
+  "required": true,
+  "package": "com.roboo.mineshafttycoonutils.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "AbstractContainerScreenAccessor",
+    "ChatCompactMixin",
+    "ChatComponentAccessor",
+    "ChatCopyMixin",
+    "ChatLogMixin",
+    "CommandSuggestionsMixin",
+    "NameTagGlyphMixin",
+    "PlayerTabOverlayMixin",
+    "ScoreboardMixin",
+    "SlotLockClickMixin",
+    "SlotLockRenderMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "mixins": [
+    "ItemStackTooltipMixin"
+  ]
+}

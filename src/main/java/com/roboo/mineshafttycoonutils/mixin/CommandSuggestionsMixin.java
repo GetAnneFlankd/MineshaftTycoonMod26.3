@@ -1,0 +1,188 @@
+package com.roboo.mineshafttycoonutils.mixin;
+
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.LiteralMessage;
+import com.mojang.brigadier.suggestion.Suggestion;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+import com.mojang.brigadier.ParseResults;
+import com.roboo.mineshafttycoonutils.config.ConfigManager;
+import com.roboo.mineshafttycoonutils.features.misc.WorldEditCommands;
+import com.roboo.mineshafttycoonutils.features.pets.PetsHelper;
+import com.roboo.mineshafttycoonutils.features.timers.PotionToggleHelper;
+import com.roboo.mineshafttycoonutils.features.warp.WarpHelper;
+import com.roboo.mineshafttycoonutils.utils.EmojiData;
+import com.roboo.mineshafttycoonutils.utils.OnlinePlayers;
+import net.minecraft.client.gui.components.CommandSuggestions;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import org.spongepowered.asm.mixin.Final;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+
+@Mixin(CommandSuggestions.class)
+public abstract class CommandSuggestionsMixin {
+
+    @Unique
+    private static final String VISIT_PREFIX = "/visit ";
+    @Unique
+    private static final String VISIT_SUGGESTION = "masterplaysxd";
+    @Unique
+    private static final String LOBBY_PREFIX = "/lobby ";
+    @Unique
+    private static final String LOBBY_SUGGESTION = "housing";
+    @Unique
+    private static final String MSG_PREFIX = "/msg ";
+    @Unique
+    private static final String TARGET_PREFIX = "/target ";
+    @Unique
+    private static final String WARP_PREFIX = "/warp ";
+    @Unique
+    private static final String PETS_PREFIX = "/pets ";
+    @Unique
+    private static final String PET_PREFIX = "/pet ";
+    @Unique
+    private static final String POTSOFF_PREFIX = "/potsoff ";
+    @Unique
+    private static final char EMOJI_TRIGGER = ':';
+
+    @Shadow @Final EditBox input;
+    @Shadow private CompletableFuture<Suggestions> pendingSuggestions;
+    @Shadow public abstract void showSuggestions(boolean narrateFirst);
+
+    @Inject(method = "updateCommandInfo", at = @At("TAIL"))
+    private void mstu$overrideSuggestions(CallbackInfo ci) {
+        String text = this.input.getValue();
+        String lower = text.toLowerCase(Locale.ROOT);
+        int cursor = this.input.getCursorPosition();
+
+        String prefix;
+        List<String> matches;
+        Map<String, String> tooltips = null;
+
+        if (lower.startsWith(VISIT_PREFIX)) {
+            prefix = VISIT_PREFIX;
+            if (cursor < prefix.length()) return;
+            String partial = text.substring(prefix.length(), cursor).toLowerCase(Locale.ROOT);
+            matches = VISIT_SUGGESTION.startsWith(partial) ? List.of(VISIT_SUGGESTION) : List.of();
+        } else if (lower.startsWith(LOBBY_PREFIX)) {
+            prefix = LOBBY_PREFIX;
+            if (cursor < prefix.length()) return;
+            String partial = text.substring(prefix.length(), cursor).toLowerCase(Locale.ROOT);
+            matches = LOBBY_SUGGESTION.startsWith(partial) ? List.of(LOBBY_SUGGESTION) : List.of();
+        } else if (lower.startsWith(MSG_PREFIX) || lower.startsWith(TARGET_PREFIX)) {
+            prefix = lower.startsWith(MSG_PREFIX) ? MSG_PREFIX : TARGET_PREFIX;
+            if (cursor < prefix.length()) return;
+            String partial = text.substring(prefix.length(), cursor);
+            if (partial.indexOf(' ') >= 0) return;
+            matches = mstu$matchingPlayers(partial);
+        } else if (ConfigManager.config.general.warpHelperEnabled && lower.startsWith(WARP_PREFIX)) {
+            prefix = WARP_PREFIX;
+            if (cursor < prefix.length()) return;
+            matches = WarpHelper.matchingArgs(text.substring(prefix.length(), cursor).toLowerCase(Locale.ROOT));
+        } else if (ConfigManager.config.general.petsHelperEnabled
+                && (lower.startsWith(PETS_PREFIX) || lower.startsWith(PET_PREFIX))) {
+            prefix = lower.startsWith(PETS_PREFIX) ? PETS_PREFIX : PET_PREFIX;
+            if (cursor < prefix.length()) return;
+            matches = PetsHelper.matchingArgs(text.substring(prefix.length(), cursor).toLowerCase(Locale.ROOT));
+        } else if (ConfigManager.config.general.potsoffCommand && lower.startsWith(POTSOFF_PREFIX)) {
+            prefix = POTSOFF_PREFIX;
+            if (cursor < prefix.length()) return;
+            matches = PotionToggleHelper.matchingArgs(text.substring(prefix.length(), cursor).toLowerCase(Locale.ROOT));
+        } else if (ConfigManager.config.emoji.suggestionsEnabled) {
+            int colonIndex = text.lastIndexOf(EMOJI_TRIGGER, cursor - 1);
+            if (colonIndex < 0 || colonIndex >= cursor) return;
+
+            String partial = text.substring(colonIndex + 1, cursor);
+            if (partial.isEmpty() || !mstu$isShortcodeChars(partial)) return;
+
+            prefix = text.substring(0, colonIndex + 1);
+            String lowerPartial = partial.toLowerCase(Locale.ROOT);
+            matches = new ArrayList<>();
+            tooltips = new LinkedHashMap<>();
+            for (String shortcode : EmojiData.allShortcodes()) {
+                if (!shortcode.startsWith(lowerPartial)) continue;
+                String match = shortcode + ":";
+                matches.add(match);
+
+                Integer codepoint = EmojiData.codepointFor(shortcode);
+                if (codepoint != null) {
+                    tooltips.put(match, new String(Character.toChars(codepoint)) + " :" + shortcode + ":");
+                }
+            }
+        } else {
+            return;
+        }
+
+        if (matches.isEmpty()) return;
+
+        SuggestionsBuilder builder = new SuggestionsBuilder(text.substring(0, cursor), prefix.length());
+        for (String match : matches) {
+            String tooltip = tooltips != null ? tooltips.get(match) : null;
+            if (tooltip != null) {
+                builder.suggest(match, new LiteralMessage(tooltip));
+            } else {
+                builder.suggest(match);
+            }
+        }
+
+        this.pendingSuggestions = builder.buildFuture();
+        this.showSuggestions(false);
+    }
+
+    @Redirect(
+            method = "updateCommandInfo",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lcom/mojang/brigadier/CommandDispatcher;getCompletionSuggestions(Lcom/mojang/brigadier/ParseResults;I)Ljava/util/concurrent/CompletableFuture;"))
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private CompletableFuture<Suggestions> mstu$filterWorldEdit(CommandDispatcher dispatcher, ParseResults parse, int cursor) {
+        CompletableFuture<Suggestions> future = dispatcher.getCompletionSuggestions(parse, cursor);
+        if (ConfigManager.config.misc.worldEditCommands) return future;
+
+        String text = this.input.getValue();
+        if (!text.startsWith("/") || text.indexOf(' ') >= 0) return future;
+
+        return future.thenApply(suggestions -> {
+            List<Suggestion> kept = suggestions.getList().stream()
+                    .filter(suggestion -> !WorldEditCommands.NAMES.contains(suggestion.getText().toLowerCase(Locale.ROOT)))
+                    .toList();
+            return kept.size() == suggestions.getList().size()
+                    ? suggestions
+                    : new Suggestions(suggestions.getRange(), kept);
+        });
+    }
+
+    @Unique
+    private static List<String> mstu$matchingPlayers(String partial) {
+        String lowerPartial = partial.toLowerCase(Locale.ROOT);
+        List<String> names = new ArrayList<>();
+        for (PlayerInfo info : OnlinePlayers.all()) {
+            String name = info.getProfile().name();
+            if (name.toLowerCase(Locale.ROOT).startsWith(lowerPartial)) names.add(name);
+        }
+        names.sort(String.CASE_INSENSITIVE_ORDER);
+        return names;
+    }
+
+    @Unique
+    private static boolean mstu$isShortcodeChars(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (!Character.isLetterOrDigit(c) && c != '_') return false;
+        }
+        return true;
+    }
+}
